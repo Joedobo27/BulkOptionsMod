@@ -25,9 +25,13 @@ import java.util.stream.Collectors;
 public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable, ServerStartedListener{
 
     private static int qualityRange = 10;
+    private static int[] successesQR = new int[]{0,0};
     private static boolean replenish = false;
     private static boolean rarityStorage = false;
+    private static int[] successesRS = new int[]{0,0,0,0};
     private static boolean preparedFoodStorage = false;
+    private static int[] successesPFS = new int[]{0,0};
+
     private static final Logger logger = Logger.getLogger(BulkOptionsMod.class.getName());
     private static ArrayList<Integer> makeItemsBulk = new ArrayList<>();
     private static final String[] STEAM_VERSION = new String[]{"1.3.1.3"};
@@ -66,14 +70,21 @@ public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable,
         addBulkItemToCrateBytecode();
         if (rarityStorage)
             answerBytecode();
+        evaluateChangesArray(successesQR, "qualityRange");
+        if (rarityStorage)
+            evaluateChangesArray(successesRS, "rarityStorage");
+        if (preparedFoodStorage)
+            evaluateChangesArray(successesPFS, "preparedFoodStorage");
     }
 
     @Override
     public void onServerStarted() {
         if (!versionCompliant)
             return;
-        if (replenish)
+        if (replenish) {
             ModActions.registerAction(new ReplenishAction());
+            logger.info("Added an action to convert herbs/spice into fresh using water.");
+        }
         if (!makeItemsBulk.isEmpty())
             makeItemsBulkReflection();
     }
@@ -94,8 +105,9 @@ public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable,
 
             String source = "toInsert.setRarity(bulkitem.getRarity());";
             answerCt.insertAt(223, source);
+            successesRS[0] = 1;
         }catch (NotFoundException | CannotCompileException e){
-            logger.log(Level.WARNING, e.getMessage(), e);
+            logger.warning(e.getMessage());
         }
     }
 
@@ -119,21 +131,24 @@ public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable,
                 @Override
                 public void edit(MethodCall methodCall) throws CannotCompileException {
                     if (Objects.equals("isDish", methodCall.getMethodName()) && preparedFoodStorage){
-                        logger.info("replace on isDish inside Item.moveToItem() at line " + methodCall.getLineNumber());
+                        logger.fine("replace on isDish inside Item.moveToItem() at line " + methodCall.getLineNumber());
                         methodCall.replace("$_ = false;");
+                        successesPFS[0] = 1;
                     } else if (Objects.equals("usesFoodState", methodCall.getMethodName()) && methodCall.getLineNumber() == 3275 &&
                             preparedFoodStorage){
-                        logger.info("replace on usesFoodState inside Item.moveToItem() at line " + methodCall.getLineNumber());
+                        logger.fine("replace on usesFoodState inside Item.moveToItem() at line " + methodCall.getLineNumber());
                         methodCall.replace("$_ = false;");
+                        successesPFS[1] = 1;
                     } else if (Objects.equals("getRarity", methodCall.getMethodName()) && methodCall.getLineNumber() == 3219 &&
                             rarityStorage){
-                        logger.info("replace on getRarity inside Item.moveToItem() at line " + methodCall.getLineNumber());
+                        logger.fine("replace on getRarity inside Item.moveToItem() at line " + methodCall.getLineNumber());
                         methodCall.replace("$_ = 0;");
+                        successesRS[1] = 1;
                     }
                 }
             });
         }catch (NotFoundException | CannotCompileException e){
-            logger.log(Level.WARNING, e.getMessage(), e);
+            logger.warning(e.getMessage());
         }
     }
 
@@ -141,7 +156,7 @@ public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable,
      * Change Item.AddBulkItem 1)so instead of calling getItemWithTemplateAndMaterial() to find matching items in a bulk container
      * it will call this mod's hook method, getTargetToAdd().
      * 2) Insert a statement that will make new rarity bulk entries.
-     * insert before-
+     * insert before and within the code block that makes new items-
      *      float percent2 = 1.0f;
      *      if (!this.isFish()) {...}
      */
@@ -158,17 +173,21 @@ public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable,
                 @Override
                 public void edit(MethodCall methodCall) throws CannotCompileException {
                     if (Objects.equals("getItemWithTemplateAndMaterial", methodCall.getMethodName())){
-                        logger.info("replace on getItemWithTemplateAndMaterial inside Item.AddBulkItem() at line "
+                        logger.fine("replace on getItemWithTemplateAndMaterial inside Item.AddBulkItem() at line "
                                 + methodCall.getLineNumber());
                         methodCall.replace("$_ = com.joedobo27.bulkoptions.BulkOptionsMod.getTargetToAdd(target, this, this.getMaterial(), auxToCheck, this.getRealTemplateId());");
+                        successesQR[0] = 1;
                     }
                 }
             });
-            String source = "toaddTo.setRarity(this.getRarity());";
-            addBulkItemCt.insertAt(3894, source);
+            if (rarityStorage) {
+                String source = "toaddTo.setRarity(this.getRarity());";
+                addBulkItemCt.insertAt(3894, source);
+                successesRS[2] = 1;
+            }
 
         }catch (NotFoundException | CannotCompileException e){
-            logger.log(Level.WARNING, e.getMessage(), e);
+            logger.warning(e.getMessage());
         }
     }
 
@@ -176,7 +195,7 @@ public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable,
      * Change Item.AddBulkItemToCrate 1)so instead of calling getItemWithTemplateAndMaterial() to find matching items in a bulk container
      * it will call this mod's hook method, getTargetToAdd().
      * 2) Insert a statement that will make new rarity bulk entries.
-     * insert before-
+     * insert before and within the code block that makes new items-
      *      float percent2 = 1.0f;
      *      if (!this.isFish()) {...}
      */
@@ -193,17 +212,21 @@ public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable,
                 @Override
                 public void edit(MethodCall methodCall) throws CannotCompileException {
                     if (Objects.equals("getItemWithTemplateAndMaterial", methodCall.getMethodName())){
-                        logger.info("replace on getItemWithTemplateAndMaterial inside Item.AddBulkItemToCrate() at line "
+                        logger.fine("replace on getItemWithTemplateAndMaterial inside Item.AddBulkItemToCrate() at line "
                                 + methodCall.getLineNumber());
                         methodCall.replace("$_ = com.joedobo27.bulkoptions.BulkOptionsMod.getTargetToAdd(target, this, this.getMaterial(), auxToCheck, this.getRealTemplateId());");
+                        successesQR[1] = 1;
                     }
                 }
             });
-            String source = "toaddTo.setRarity(this.getRarity());";
-            addBulkItemCt.insertAt(3680, source);
+            if (rarityStorage){
+                String source = "toaddTo.setRarity(this.getRarity());";
+                addBulkItemCt.insertAt(3680, source);
+                successesRS[3] = 1;
+            }
 
         }catch (NotFoundException | CannotCompileException e){
-            logger.log(Level.WARNING, e.getMessage(), e);
+            logger.warning(e.getMessage());
         }
     }
 
@@ -249,22 +272,41 @@ public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable,
     }
 
     private static void makeItemsBulkReflection() {
+        final int[] successCount = {0};
         Arrays.stream(ItemTemplateFactory.getInstance().getTemplates())
                 .forEach(itemTemplate -> {
                     if(makeItemsBulk.stream()
                             .filter(value -> Objects.equals(value, itemTemplate.getTemplateId()))
                             .count() > 0){
-                        setFieldBulk(itemTemplate);
+                        if(setFieldBulk(itemTemplate))
+                            successCount[0]++;
                     }
                 });
-        logger.info("ItemIds set to bulk: " + makeItemsBulk.toString());
+        if (successCount[0] != makeItemsBulk.size())
+            logger.info("Make items bulk count specified, actual done: " + makeItemsBulk.size() + ", " + successCount[0]);
+        else
+            logger.info("Make items bulk SUCCESS. TemplateId's " + makeItemsBulk.toString());
     }
 
-    private static void setFieldBulk(ItemTemplate itemTemplate){
+    private static boolean setFieldBulk(ItemTemplate itemTemplate){
         try {
             Field fieldBulk = ReflectionUtil.getField(ItemTemplate.class, "bulk");
             ReflectionUtil.setPrivateField(itemTemplate, fieldBulk, Boolean.TRUE);
-        }catch (IllegalAccessException | NoSuchFieldException ignored){}
+        }catch (IllegalAccessException | NoSuchFieldException e){
+            logger.fine(e.getMessage());
+            return false;
+        }
+        return true;
     }
 
+    @SuppressWarnings("unused")
+    private static void evaluateChangesArray(int[] ints, String option) {
+        boolean changesSuccessful = Arrays.stream(ints).noneMatch(value -> value == 0);
+        if (changesSuccessful) {
+            logger.log(Level.INFO, option + " option changes SUCCESS");
+        } else {
+            logger.log(Level.INFO, option + " option changes FAILURE");
+            logger.log(Level.FINE, Arrays.toString(ints));
+        }
+    }
 }
