@@ -25,74 +25,58 @@ import java.util.stream.Collectors;
 public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable, ServerStartedListener{
 
     private static int qualityRange = 10;
-    private static int[] successesQR = new int[]{0,0};
-    private static boolean replenish = false;
-    private static boolean rarityStorage = false;
-    private static int[] successesRS = new int[]{0,0,0,0};
-    private static boolean preparedFoodStorage = false;
-    private static int[] successesPFS = new int[]{0,0};
-
     private static final Logger logger = Logger.getLogger(BulkOptionsMod.class.getName());
-    private static ArrayList<Integer> makeItemsBulk = new ArrayList<>();
-    private static final String[] STEAM_VERSION = new String[]{"1.3.1.3"};
-    private static boolean versionCompliant = false;
+    private static TempConstants vars = new TempConstants(new int[]{0,0}, false, false, new int[]{0,0,0,0},
+            false, new int[]{0,0});
 
     @Override
     public void configure(Properties properties) {
+
         qualityRange = Integer.parseInt(properties.getProperty("qualityRange", Integer.toString(qualityRange)));
-        replenish = Boolean.parseBoolean(properties.getProperty("replenish", Boolean.toString(replenish)));
-        rarityStorage = Boolean.parseBoolean(properties.getProperty("rarityStorage", Boolean.toString(rarityStorage)));
-        preparedFoodStorage = Boolean.parseBoolean(properties.getProperty("preparedFoodStorage", Boolean.toString(preparedFoodStorage)));
+        vars.setReplenish(Boolean.parseBoolean(properties.getProperty("replenish", Boolean.toString(vars.replenish))));
+        vars.setRarityStorage(Boolean.parseBoolean(properties.getProperty("rarityStorage", Boolean.toString(vars.rarityStorage))));
+        vars.setPreparedFoodStorage(Boolean.parseBoolean(properties.getProperty("preparedFoodStorage", Boolean.toString(vars.preparedFoodStorage))));
         if (properties.getProperty("makeBulkItems").length() > 0) {
             logger.log(Level.INFO, "makeBulkItems: " + properties.getProperty("makeBulkItems"));
-            makeItemsBulk = Arrays.stream(properties.getProperty("makeBulkItems").replaceAll("\\s", "").split(","))
+            vars.setMakeItemsBulk(Arrays.stream(properties.getProperty("makeBulkItems").replaceAll("\\s", "").split(","))
                     .mapToInt(Integer::parseInt)
                     .boxed()
-                    .collect(Collectors.toCollection(ArrayList::new));
+                    .collect(Collectors.toCollection(ArrayList::new)));
         }
-
-        if (Arrays.stream(STEAM_VERSION)
-                .filter(s -> Objects.equals(s, properties.getProperty("steamVersion", null)))
-                .count() > 0)
-            versionCompliant = true;
-        else
-            logger.log(Level.WARNING, "WU version mismatch. Your " + properties.getProperty(" steamVersion", null)
-                    + "version doesn't match one of BulkOptionsMod's required versions " + Arrays.toString(STEAM_VERSION));
     }
 
     @Override
     public void preInit() {
-        if (!versionCompliant)
-            return;
-        if (preparedFoodStorage || rarityStorage)
+        if (vars.preparedFoodStorage || vars.rarityStorage)
             moveToItemBytecode();
         addBulkItemBytecode();
         addBulkItemToCrateBytecode();
-        if (rarityStorage)
+        if (vars.rarityStorage)
             answerBytecode();
-        evaluateChangesArray(successesQR, "qualityRange");
-        if (rarityStorage)
-            evaluateChangesArray(successesRS, "rarityStorage");
-        if (preparedFoodStorage)
-            evaluateChangesArray(successesPFS, "preparedFoodStorage");
+        evaluateChangesArray(vars.successesQR, "qualityRange");
+        if (vars.rarityStorage)
+            evaluateChangesArray(vars.successesRS, "rarityStorage");
+        if (vars.preparedFoodStorage)
+            evaluateChangesArray(vars.successesPFS, "preparedFoodStorage");
     }
 
     @Override
     public void onServerStarted() {
-        if (!versionCompliant)
-            return;
-        if (replenish) {
+        if (vars.replenish) {
             ModActions.registerAction(new ReplenishAction());
             logger.info("Added an action to convert herbs/spice into fresh using water.");
         }
-        if (!makeItemsBulk.isEmpty())
+        if (!vars.makeItemsBulk.isEmpty())
             makeItemsBulkReflection();
+
+        vars = null;
     }
 
     /**
      * insert into RemoveItemQuestion.answer() code to handle making the withdrawn item of rarity.
      * insert before-
      *      if (toInsert.isRepairable()) {...}
+     * line 223: 777
      */
     private void answerBytecode(){
         try{
@@ -105,16 +89,17 @@ public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable,
 
             String source = "toInsert.setRarity(bulkitem.getRarity());";
             answerCt.insertAt(223, source);
-            successesRS[0] = 1;
+            vars.successesRS[0] = 1;
         }catch (NotFoundException | CannotCompileException e){
             logger.warning(e.getMessage());
         }
     }
 
     /**
-     * Change Item.moveToItem() 1)so food items can be placed in bulk. Methods isDish() and usesFoodState() will always be false disabling
-     * the limiting logic statements.
-     * 2) so rare items can go in bulk; logic, if (this.getRarity() > 0) {...} is always false.
+     * Change Item.moveToItem() inside the if (target.isBulkContainer()) {...} code block so
+     *      1)so food items can be placed in bulk. Methods isDish() and usesFoodState() will always be false disabling
+     *      the limiting logic statements. line 3346: 5245
+     * 2) so rare items can go in bulk; logic, if (this.getRarity() > 0) {...} is always false. line 3290: 4825
      */
     private void moveToItemBytecode(){
         try {
@@ -130,20 +115,20 @@ public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable,
             moveToItemCt.instrument(new ExprEditor(){
                 @Override
                 public void edit(MethodCall methodCall) throws CannotCompileException {
-                    if (Objects.equals("isDish", methodCall.getMethodName()) && preparedFoodStorage){
+                    if (Objects.equals("isDish", methodCall.getMethodName()) && vars.preparedFoodStorage){
                         logger.fine("replace on isDish inside Item.moveToItem() at line " + methodCall.getLineNumber());
                         methodCall.replace("$_ = false;");
-                        successesPFS[0] = 1;
-                    } else if (Objects.equals("usesFoodState", methodCall.getMethodName()) && methodCall.getLineNumber() == 3275 &&
-                            preparedFoodStorage){
+                        vars.successesPFS[0] = 1;
+                    } else if (Objects.equals("usesFoodState", methodCall.getMethodName()) && methodCall.getLineNumber() == 3346 &&
+                            vars.preparedFoodStorage){
                         logger.fine("replace on usesFoodState inside Item.moveToItem() at line " + methodCall.getLineNumber());
                         methodCall.replace("$_ = false;");
-                        successesPFS[1] = 1;
-                    } else if (Objects.equals("getRarity", methodCall.getMethodName()) && methodCall.getLineNumber() == 3219 &&
-                            rarityStorage){
+                        vars.successesPFS[1] = 1;
+                    } else if (Objects.equals("getRarity", methodCall.getMethodName()) && methodCall.getLineNumber() == 3290 &&
+                            vars.rarityStorage){
                         logger.fine("replace on getRarity inside Item.moveToItem() at line " + methodCall.getLineNumber());
                         methodCall.replace("$_ = 0;");
-                        successesRS[1] = 1;
+                        vars.successesRS[1] = 1;
                     }
                 }
             });
@@ -156,9 +141,10 @@ public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable,
      * Change Item.AddBulkItem 1)so instead of calling getItemWithTemplateAndMaterial() to find matching items in a bulk container
      * it will call this mod's hook method, getTargetToAdd().
      * 2) Insert a statement that will make new rarity bulk entries.
-     * insert before and within the code block that makes new items-
-     *      float percent2 = 1.0f;
-     *      if (!this.isFish()) {...}
+     *      insert before and within the code block that makes new items-
+     *          float percent2 = 1.0f;
+     *          if (!this.isFish()) {...}
+     *      line 3965: 485
      */
     private void addBulkItemBytecode(){
         try {
@@ -176,14 +162,14 @@ public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable,
                         logger.fine("replace on getItemWithTemplateAndMaterial inside Item.AddBulkItem() at line "
                                 + methodCall.getLineNumber());
                         methodCall.replace("$_ = com.joedobo27.bulkoptions.BulkOptionsMod.getTargetToAdd(target, this, this.getMaterial(), auxToCheck, this.getRealTemplateId());");
-                        successesQR[0] = 1;
+                        vars.successesQR[0] = 1;
                     }
                 }
             });
-            if (rarityStorage) {
+            if (vars.rarityStorage) {
                 String source = "toaddTo.setRarity(this.getRarity());";
-                addBulkItemCt.insertAt(3894, source);
-                successesRS[2] = 1;
+                addBulkItemCt.insertAt(3965, source);
+                vars.successesRS[2] = 1;
             }
 
         }catch (NotFoundException | CannotCompileException e){
@@ -195,9 +181,10 @@ public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable,
      * Change Item.AddBulkItemToCrate 1)so instead of calling getItemWithTemplateAndMaterial() to find matching items in a bulk container
      * it will call this mod's hook method, getTargetToAdd().
      * 2) Insert a statement that will make new rarity bulk entries.
-     * insert before and within the code block that makes new items-
-     *      float percent2 = 1.0f;
-     *      if (!this.isFish()) {...}
+     *      insert before and within the code block that makes new items-
+     *          float percent2 = 1.0f;
+     *          if (!this.isFish()) {...}
+     *      line 3838: 657
      */
     private void addBulkItemToCrateBytecode(){
         try {
@@ -215,14 +202,14 @@ public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable,
                         logger.fine("replace on getItemWithTemplateAndMaterial inside Item.AddBulkItemToCrate() at line "
                                 + methodCall.getLineNumber());
                         methodCall.replace("$_ = com.joedobo27.bulkoptions.BulkOptionsMod.getTargetToAdd(target, this, this.getMaterial(), auxToCheck, this.getRealTemplateId());");
-                        successesQR[1] = 1;
+                        vars.successesQR[1] = 1;
                     }
                 }
             });
-            if (rarityStorage){
+            if (vars.rarityStorage){
                 String source = "toaddTo.setRarity(this.getRarity());";
-                addBulkItemCt.insertAt(3680, source);
-                successesRS[3] = 1;
+                addBulkItemCt.insertAt(3838, source);
+                vars.successesRS[3] = 1;
             }
 
         }catch (NotFoundException | CannotCompileException e){
@@ -273,6 +260,7 @@ public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable,
 
     private static void makeItemsBulkReflection() {
         final int[] successCount = {0};
+        ArrayList<Integer> makeItemsBulk = vars.getMakeItemsBulk();
         Arrays.stream(ItemTemplateFactory.getInstance().getTemplates())
                 .forEach(itemTemplate -> {
                     if(makeItemsBulk.stream()
