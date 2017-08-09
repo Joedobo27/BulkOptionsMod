@@ -1,7 +1,6 @@
 # BulkOptionsMod
 A WU mod that gives options for storing stuff in bulk containers.
 
-
 :Required:</br>
 Ago's WurmServerModLauncher. https://github.com/ago1024/WurmServerModLauncher/releases
 

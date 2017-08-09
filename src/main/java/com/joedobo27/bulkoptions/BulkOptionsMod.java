@@ -31,7 +31,6 @@ public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable,
 
     @Override
     public void configure(Properties properties) {
-
         qualityRange = Integer.parseInt(properties.getProperty("qualityRange", Integer.toString(qualityRange)));
         vars.setReplenish(Boolean.parseBoolean(properties.getProperty("replenish", Boolean.toString(vars.replenish))));
         vars.setRarityStorage(Boolean.parseBoolean(properties.getProperty("rarityStorage", Boolean.toString(vars.rarityStorage))));
@@ -68,7 +67,6 @@ public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable,
         }
         if (!vars.makeItemsBulk.isEmpty())
             makeItemsBulkReflection();
-
         vars = null;
     }
 
