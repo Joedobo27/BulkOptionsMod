@@ -1,12 +1,13 @@
 package com.joedobo27.bom;
 
 
+import com.joedobo27.libs.bytecode.BytecodeTools;
 import com.wurmonline.server.creatures.Communicator;
 import com.wurmonline.server.items.Item;
 import com.wurmonline.server.items.ItemTemplate;
 import com.wurmonline.server.items.ItemTemplateFactory;
 import javassist.*;
-import javassist.bytecode.Descriptor;
+import javassist.bytecode.*;
 import javassist.expr.ExprEditor;
 import javassist.expr.MethodCall;
 import org.gotti.wurmunlimited.modloader.ReflectionUtil;
@@ -17,6 +18,8 @@ import org.gotti.wurmunlimited.modsupport.actions.ModActions;
 import java.lang.reflect.Field;
 import java.util.*;
 import java.util.logging.Logger;
+import java.util.stream.IntStream;
+
 
 public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable, ServerStartedListener, PlayerMessageListener {
 
@@ -113,30 +116,25 @@ public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable,
      * Change Item.AddBulkItem 1)so instead of calling getItemWithTemplateAndMaterial() to find matching items in a bulk container
      * it will call this mod's hook method, getTargetToAdd().
      * 2) Insert a statement that will make new rarity bulk entries.
-     *      insert before and within the code block that makes new items-
-     *          float percent2 = 1.0f;
-     *          if (!this.isFish()) {...}
-     *      line 3965: 485
+     *      insert after ItemFactory.createItem(){...}
      */
-    private void addBulkItemBytecode(){
-        ConfigureOptions options = ConfigureOptions.getInstance();
+    private static void addBulkItemBytecode(){
         try {
-            CtClass itemCt = HookManager.getInstance().getClassPool().get("com.wurmonline.server.items.Item");
-            CtClass returnType = CtPrimitiveType.booleanType;
-            CtClass[] paramTypes = {
-                    HookManager.getInstance().getClassPool().get("com.wurmonline.server.creatures.Creature"),
-                    HookManager.getInstance().getClassPool().get("com.wurmonline.server.items.Item")
-            };
-            CtMethod addBulkItemCt = itemCt.getMethod("AddBulkItem", Descriptor.ofMethod(returnType, paramTypes));
-            if (options.isEnableBulkQualitySorting()) {
+            if (ConfigureOptions.getInstance().isEnableBulkQualitySorting()) {
                 final boolean[] qualitySortOkay = {false};
-                addBulkItemCt.instrument(new ExprEditor() {
+                HookManager.getInstance().getClassPool().get("com.wurmonline.server.items.Item")
+                        .getMethod("AddBulkItem", Descriptor.ofMethod(CtPrimitiveType.booleanType, new CtClass[]{
+                                HookManager.getInstance().getClassPool().get("com.wurmonline.server.creatures.Creature"),
+                                HookManager.getInstance().getClassPool().get("com.wurmonline.server.items.Item")}))
+                        .instrument(new ExprEditor() {
                     @Override
                     public void edit(MethodCall methodCall) throws CannotCompileException {
                         if (Objects.equals("getItemWithTemplateAndMaterial", methodCall.getMethodName())) {
                             logger.fine("replace on getItemWithTemplateAndMaterial inside Item.AddBulkItem() at line "
                                     + methodCall.getLineNumber());
-                            methodCall.replace("$_ = com.wurmonline.server.items.Item.getTargetToAdd(target, this, this.getMaterial(), auxToCheck, this.getRealTemplateId());");
+                            methodCall.replace(
+                                    "$_ = com.wurmonline.server.items.Item.getTargetToAdd(" +
+                                            "target, this, this.getMaterial(), auxToCheck, this.getRealTemplateId());");
                             qualitySortOkay[0] = true;
                         }
                     }
@@ -144,11 +142,21 @@ public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable,
                 if (!qualitySortOkay[0])
                     logger.warning("Error enabling bulk-ql-sort in addBulkItemBytecode");
             }
-            if (options.isEnableRarityStorage()) {
-                String source = "toaddTo.setRarity(this.getRarity());";
-                addBulkItemCt.insertAt(3965, source);
-            }
-        }catch (NotFoundException | CannotCompileException e){
+        if (ConfigureOptions.getInstance().isEnableRarityStorage()) {
+            // Get the insert point line number which is just after the call to ItemFactory.createItem().
+            int insertLine = getInsertLineAfterMethod("com.wurmonline.server.items.Item",
+                    new String[]{"AddBulkItem", "(Lcom/wurmonline/server/creatures/Creature;Lcom/wurmonline/server/items/Item;)Z"},
+                    Opcode.INVOKESTATIC, new String[]{"createItem",
+                            "(IFBBLjava/lang/String;)Lcom/wurmonline/server/items/Item;",
+                            "com.wurmonline.server.items.ItemFactory"});
+
+            HookManager.getInstance().getClassPool().get("com.wurmonline.server.items.Item").getMethod("AddBulkItem",
+                    Descriptor.ofMethod(CtPrimitiveType.booleanType, new CtClass[]{
+                            HookManager.getInstance().getClassPool().get("com.wurmonline.server.creatures.Creature"),
+                            HookManager.getInstance().getClassPool().get("com.wurmonline.server.items.Item")}))
+                    .insertAt(insertLine, "toaddTo.setRarity(this.getRarity());");
+        }
+        }catch (NotFoundException | CannotCompileException | RuntimeException | BadBytecode e){
             logger.warning(e.getMessage());
         }
     }
@@ -158,31 +166,26 @@ public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable,
      *      1)so instead of calling getItemWithTemplateAndMaterial() to find matching items
      *          in a bulk container it will call this mod's hook method, getTargetToAdd().
      *      2) Insert a statement that will make new rarity bulk entries.
-     *          insert before and within the code block that makes new items-
-     *
-     *          float percent2 = 1.0f;
-     *          if (!this.isFish()) {...}
-     *      line 3838: 657
+     *          insert after ItemFactory.createItem(){...}
      */
-    private void addBulkItemToCrateBytecode(){
+    private static void addBulkItemToCrateBytecode(){
         ConfigureOptions options = ConfigureOptions.getInstance();
         try {
-            CtClass itemCt = HookManager.getInstance().getClassPool().get("com.wurmonline.server.items.Item");
-            CtClass returnType = CtPrimitiveType.booleanType;
-            CtClass[] paramTypes = {
-                    HookManager.getInstance().getClassPool().get("com.wurmonline.server.creatures.Creature"),
-                    HookManager.getInstance().getClassPool().get("com.wurmonline.server.items.Item")
-            };
-            CtMethod addBulkItemCt = itemCt.getMethod("AddBulkItemToCrate", Descriptor.ofMethod(returnType, paramTypes));
             if (options.isEnableBulkQualitySorting()) {
                 final boolean[] qualitySortOkay = {false};
-                addBulkItemCt.instrument(new ExprEditor() {
+                HookManager.getInstance().getClassPool().get("com.wurmonline.server.items.Item")
+                        .getMethod("AddBulkItemToCrate", Descriptor.ofMethod(CtPrimitiveType.booleanType,
+                                new CtClass[]{
+                                        HookManager.getInstance().getClassPool().get("com.wurmonline.server.creatures.Creature"),
+                                        HookManager.getInstance().getClassPool().get("com.wurmonline.server.items.Item")
+                                })).instrument(new ExprEditor() {
                     @Override
                     public void edit(MethodCall methodCall) throws CannotCompileException {
                         if (Objects.equals("getItemWithTemplateAndMaterial", methodCall.getMethodName())) {
                             logger.fine("replace on getItemWithTemplateAndMaterial inside Item.AddBulkItemToCrate() at line "
                                     + methodCall.getLineNumber());
-                            methodCall.replace("$_ = com.wurmonline.server.items.Item.getTargetToAdd(target, this, this.getMaterial(), auxToCheck, this.getRealTemplateId());");
+                            methodCall.replace("$_ = com.wurmonline.server.items.Item.getTargetToAdd(" +
+                                    "target, this, this.getMaterial(), auxToCheck, this.getRealTemplateId());");
                             qualitySortOkay[0] = true;
                         }
                     }
@@ -191,34 +194,45 @@ public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable,
                     logger.warning("Error enabling bulk-ql-sort in addBulkItemBytecode");
             }
             if (options.isEnableRarityStorage()){
-                String source = "toaddTo.setRarity(this.getRarity());";
-                addBulkItemCt.insertAt(3838, source);
+                // Get the insert point line number which is just after the call to ItemFactory.createItem().
+                int insertLine = getInsertLineAfterMethod("com.wurmonline.server.items.Item",
+                        new String[]{"AddBulkItemToCrate", "(Lcom/wurmonline/server/creatures/Creature;Lcom/wurmonline/server/items/Item;)Z"},
+                        Opcode.INVOKESTATIC, new String[]{"createItem",
+                                "(IFBBLjava/lang/String;)Lcom/wurmonline/server/items/Item;",
+                                "com.wurmonline.server.items.ItemFactory"});
+
+                HookManager.getInstance().getClassPool().get("com.wurmonline.server.items.Item")
+                        .getMethod("AddBulkItemToCrate", Descriptor.ofMethod(CtPrimitiveType.booleanType,
+                                new CtClass[]{
+                                        HookManager.getInstance().getClassPool().get("com.wurmonline.server.creatures.Creature"),
+                                        HookManager.getInstance().getClassPool().get("com.wurmonline.server.items.Item")
+                                })).insertAt(insertLine, "toaddTo.setRarity(this.getRarity());");
             }
 
-        }catch (NotFoundException | CannotCompileException e){
+        }catch (NotFoundException | CannotCompileException | RuntimeException | BadBytecode e){
             logger.warning(e.getMessage());
         }
     }
 
     /**
      * insert into RemoveItemQuestion.answer() code to handle making the withdrawn item of rarity.
-     * insert before-
-     *      if (toInsert.isRepairable()) {...}
-     * line 223: 777
+     * insert after-
+     *      ItemFactory.createItem(){...}
      */
-    private void answerBytecode(){
+    private static void answerBytecode(){
         try{
-            CtClass RemoveItemQuestionCt = HookManager.getInstance().getClassPool().get(
-                    "com.wurmonline.server.questions.RemoveItemQuestion");
-            CtClass returnType =  CtPrimitiveType.voidType;
-            CtClass[] paramTypes = {
-                    HookManager.getInstance().getClassPool().get("java.util.Properties")
-            };
-            CtMethod answerCt = RemoveItemQuestionCt.getMethod("answer", Descriptor.ofMethod(returnType, paramTypes));
+            int insertLine = getInsertLineAfterMethod("com.wurmonline.server.questions.RemoveItemQuestion",
+                    new String[]{"answer", "(Ljava/util/Properties;)V"},
+                    Opcode.INVOKESTATIC, new String[]{"createItem",
+                            "(IFBBLjava/lang/String;)Lcom/wurmonline/server/items/Item;",
+                            "com.wurmonline.server.items.ItemFactory"});
 
-            String source = "toInsert.setRarity(bulkitem.getRarity());";
-            answerCt.insertAt(223, source);
-        }catch (NotFoundException | CannotCompileException e){
+            HookManager.getInstance().getClassPool().get(
+                    "com.wurmonline.server.questions.RemoveItemQuestion").getMethod("answer",
+                    Descriptor.ofMethod(CtPrimitiveType.voidType, new CtClass[]{
+                            HookManager.getInstance().getClassPool().get("java.util.Properties")
+                    })).insertAt(insertLine, "toInsert.setRarity(bulkitem.getRarity());");
+        }catch (NotFoundException | CannotCompileException | BadBytecode e){
             logger.warning(e.getMessage());
         }
     }
@@ -248,6 +262,9 @@ public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable,
             };
             CtMethod ctMethodMoveToItem = ctClassItem.getMethod("moveToItem", Descriptor.ofMethod(returnType, paramTypes));
 
+            final int[] usesFoodStateCounter = {0};
+            final int[] getRarityCounter = {0};
+
             ctMethodMoveToItem.instrument(new ExprEditor(){
                 @Override
                 public void edit(MethodCall methodCall) throws CannotCompileException {
@@ -255,16 +272,21 @@ public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable,
                         logger.fine("replace on isDish inside Item.moveToItem() at line " + methodCall.getLineNumber());
                         methodCall.replace("$_ = false;");
                         successes[0] = true;
-                    } else if (Objects.equals("usesFoodState", methodCall.getMethodName()) && methodCall.getLineNumber() == 3402 &&
+                    } else if (Objects.equals("usesFoodState", methodCall.getMethodName()) &&
                             options.isEnablePreparedFoodStorage()){
-                        logger.fine("replace on usesFoodState inside Item.moveToItem() at line " + methodCall.getLineNumber());
-                        methodCall.replace("$_ = false;");
-                        successes[1] = true;
-                    } else if (Objects.equals("getRarity", methodCall.getMethodName()) && methodCall.getLineNumber() == 3345 &&
-                            options.isEnableRarityStorage()){
-                        logger.fine("replace on getRarity inside Item.moveToItem() at line " + methodCall.getLineNumber());
-                        methodCall.replace("$_ = 0;");
-                        successes[2] = true;
+                        usesFoodStateCounter[0]++;
+                        if (usesFoodStateCounter[0] == 3) {
+                            logger.fine("replace on usesFoodState inside Item.moveToItem() at line " + methodCall.getLineNumber());
+                            methodCall.replace("$_ = false;");
+                            successes[1] = true;
+                        }
+                    } else if (Objects.equals("getRarity", methodCall.getMethodName()) && options.isEnableRarityStorage()){
+                        getRarityCounter[0]++;
+                        if (getRarityCounter[0] == 5) {
+                            logger.fine("replace on getRarity inside Item.moveToItem() at line " + methodCall.getLineNumber());
+                            methodCall.replace("$_ = 0;");
+                            successes[2] = true;
+                        }
                     }
                 }
             });
@@ -368,6 +390,38 @@ public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable,
             return false;
         }
         return true;
+    }
+
+    private static int getInsertLineAfterMethod(String classStringName, String[] parentMethod, int opcode, String[] insertMethod)
+            throws NotFoundException, BadBytecode {
+        List methods = HookManager.getInstance().getClassPool().get(classStringName).getClassFile()
+                .getMethods();
+        MethodInfo methodInfo = IntStream.range(0, methods.size())
+                .mapToObj(value -> (MethodInfo) methods.get(value))
+                .filter(methodInfo1 -> Objects.equals(parentMethod[0], methodInfo1.getName()))
+                .filter(methodInfo1 -> Objects.equals(parentMethod[1], methodInfo1.getDescriptor()))
+                .findFirst()
+                .orElseThrow(RuntimeException::new);
+        BytecodeTools bytecodeTools = new BytecodeTools(methodInfo.getConstPool());
+        int constPoolIndex = bytecodeTools.findMethodIndex(opcode, insertMethod[0], insertMethod[1], insertMethod[2]);
+        int bytecodeIndex = 0;
+        CodeIterator codeIterator = methodInfo.getCodeAttribute().iterator();
+        codeIterator.begin();
+        while (codeIterator.hasNext()) {
+            int index = codeIterator.next();
+            long bytecode = BytecodeTools.getBytecodeAtIndex(codeIterator.lookAhead() - index, index, codeIterator);
+            long checkBytecode = (opcode << 8) + constPoolIndex;
+            if (bytecode == checkBytecode) {
+                bytecodeIndex = index;
+            }
+        }
+        LineNumberAttribute lineNumberAttribute = (LineNumberAttribute) methodInfo.getCodeAttribute().getAttribute(LineNumberAttribute.tag);
+        int lineNumber = lineNumberAttribute.toLineNumber(bytecodeIndex);
+        int tableIndex = IntStream.range(0, lineNumberAttribute.tableLength())
+                .filter(value -> Objects.equals(lineNumberAttribute.lineNumber(value), lineNumber))
+                .findFirst()
+                .orElse(0);
+        return lineNumberAttribute.lineNumber(tableIndex + 1);
     }
 
 }
