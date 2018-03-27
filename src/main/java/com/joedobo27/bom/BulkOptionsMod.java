@@ -1,12 +1,10 @@
-package com.joedobo27.bulkoptions;
+package com.joedobo27.bom;
 
 
-import com.wurmonline.server.behaviours.ActionEntry;
 import com.wurmonline.server.creatures.Communicator;
 import com.wurmonline.server.items.Item;
 import com.wurmonline.server.items.ItemTemplate;
 import com.wurmonline.server.items.ItemTemplateFactory;
-import com.wurmonline.server.players.Titles;
 import javassist.*;
 import javassist.bytecode.Descriptor;
 import javassist.expr.ExprEditor;
@@ -18,7 +16,6 @@ import org.gotti.wurmunlimited.modsupport.actions.ModActions;
 
 import java.lang.reflect.Field;
 import java.util.*;
-import java.util.logging.Level;
 import java.util.logging.Logger;
 
 public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable, ServerStartedListener, PlayerMessageListener {
@@ -48,46 +45,37 @@ public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable,
 
     @Override
     public void preInit() {
-        int[] result;
-        int[] successes = new int[8];
-        Arrays.fill(successes, 0);
+
         ConfigureOptions options = ConfigureOptions.getInstance();
 
-        injectItemSortingMethods();
-
-        result = addBulkItemBytecode();
-        System.arraycopy(result,0, successes, 0, 2);
-        result = addBulkItemToCrateBytecode();
-        System.arraycopy(result,0, successes, 2, 2);
+        if (options.isEnableBulkQualitySorting()) {
+            injectItemSortingMethods();
+        }
+        if (options.isEnableBulkQualitySorting() || options.isEnableRarityStorage()){
+            addBulkItemBytecode();
+            addBulkItemToCrateBytecode();
+        }
         if (options.isEnableRarityStorage()) {
-            result = answerBytecode();
-            System.arraycopy(result,0, successes, 4, 1);
+            answerBytecode();
         }
         if (options.isEnablePreparedFoodStorage() || options.isEnableRarityStorage()) {
-            result = moveToItemBytecode();
-            System.arraycopy(result,0, successes, 5, 3);
+            moveToItemBytecode();
         }
-        evaluateChangesArray(successes, "BulkOptionsMod");
     }
 
     @Override
     public void onServerStarted() {
-        for (Titles.Title title : Titles. Title.values()) {
-            logger.info(title.toString());
+
+        ReplenishActionPerformer replenishActionPerformer = ReplenishActionPerformer.getReplenishActionPerformer();
+        ModActions.registerAction(replenishActionPerformer.getActionEntry());
+        ModActions.registerAction(replenishActionPerformer);
+        if (ConfigureOptions.getInstance().isEnableBulkQualitySorting()) {
+            ConfigureBinActionPerformer configureBinActionPerformer = ConfigureBinActionPerformer.getConfigureBinActionPerformer();
+            ModActions.registerAction(configureBinActionPerformer.getActionEntry());
+            ModActions.registerAction(configureBinActionPerformer);
         }
 
-        ConfigureOptions options = ConfigureOptions.getInstance();
-        if (options.isEnableReplenish()) {
-            int replenishEntryId = ModActions.getNextActionId();
-            ActionEntry actionEntryReplenish = ActionEntry.createEntry((short)replenishEntryId, "Replenish",
-                    "replenishing", new int[]{});
-            ModActions.registerAction(actionEntryReplenish);
-            ReplenishActionPerformer replenishActionPerformer = new ReplenishActionPerformer(replenishEntryId,
-                    actionEntryReplenish);
-            ModActions.registerAction(replenishActionPerformer);
-            logger.info("Added Replenish action to convert herbs/spice into fresh using water.");
-        }
-        if (options.getMakeTheseItemsBulk() != null)
+        if (ConfigureOptions.getInstance().getMakeTheseItemsBulk() != null)
             makeItemsBulkReflection();
     }
 
@@ -105,10 +93,11 @@ public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable,
                     "if (bulkItems[i].getAuxData() != depositAuxByte){continue;}"+
                     "if ((depositRealTemplateId != -10 || bulkItems[i].getData1() != -1) && bulkItems[i].getData1() != depositRealTemplateId){continue;}"+
                     "if (bulkItems[i].getRarity() != depositItem.getRarity()){continue;}"+
-                    "int intPartLower = (int) Math.floor((double)(bulkItems[i].getQualityLevel() / "+ConfigureOptions.getInstance().getQualityRange()+"));"+
-                    "boolean isLowerBoundGTEQ = depositItem.getQualityLevel() >= intPartLower * "+ConfigureOptions.getInstance().getQualityRange()+";"+
-                    "int intPartUpper = (int) Math.floor((double)(bulkItems[i].getQualityLevel() / "+ConfigureOptions.getInstance().getQualityRange()+")) + 1;"+
-                    "boolean isUpperBoundLT = depositItem.getQualityLevel() < intPartUpper * "+ConfigureOptions.getInstance().getQualityRange()+";"+
+                    "int qualityRange = Math.max(100, bulkContainer.getData2() == -1 ? 100 : bulkContainer.getData2() == 0 ? 100 : bulkContainer.getData2());"+
+                    "int intPartLower = (int) Math.floor((double)(bulkItems[i].getQualityLevel() / qualityRange));"+
+                    "boolean isLowerBoundGTEQ = depositItem.getQualityLevel() >= intPartLower * qualityRange;"+
+                    "int intPartUpper = (int) Math.floor((double)(bulkItems[i].getQualityLevel() / qualityRange)) + 1;"+
+                    "boolean isUpperBoundLT = depositItem.getQualityLevel() < intPartUpper * qualityRange;"+
                     "if (!isLowerBoundGTEQ || !isUpperBoundLT){continue;}"+
                     "itemMatch = bulkItems[i];"+
                     "break;}"+
@@ -129,9 +118,7 @@ public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable,
      *          if (!this.isFish()) {...}
      *      line 3965: 485
      */
-    private int[] addBulkItemBytecode(){
-        int[] successes = new int[2];
-        Arrays.fill(successes, 0);
+    private void addBulkItemBytecode(){
         ConfigureOptions options = ConfigureOptions.getInstance();
         try {
             CtClass itemCt = HookManager.getInstance().getClassPool().get("com.wurmonline.server.items.Item");
@@ -141,27 +128,29 @@ public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable,
                     HookManager.getInstance().getClassPool().get("com.wurmonline.server.items.Item")
             };
             CtMethod addBulkItemCt = itemCt.getMethod("AddBulkItem", Descriptor.ofMethod(returnType, paramTypes));
-            addBulkItemCt.instrument(new ExprEditor(){
-                @Override
-                public void edit(MethodCall methodCall) throws CannotCompileException {
-                    if (Objects.equals("getItemWithTemplateAndMaterial", methodCall.getMethodName())){
-                        logger.fine("replace on getItemWithTemplateAndMaterial inside Item.AddBulkItem() at line "
-                                + methodCall.getLineNumber());
-                        methodCall.replace("$_ = com.wurmonline.server.items.Item.getTargetToAdd(target, this, this.getMaterial(), auxToCheck, this.getRealTemplateId());");
-                        successes[0] = 1;
+            if (options.isEnableBulkQualitySorting()) {
+                final boolean[] qualitySortOkay = {false};
+                addBulkItemCt.instrument(new ExprEditor() {
+                    @Override
+                    public void edit(MethodCall methodCall) throws CannotCompileException {
+                        if (Objects.equals("getItemWithTemplateAndMaterial", methodCall.getMethodName())) {
+                            logger.fine("replace on getItemWithTemplateAndMaterial inside Item.AddBulkItem() at line "
+                                    + methodCall.getLineNumber());
+                            methodCall.replace("$_ = com.wurmonline.server.items.Item.getTargetToAdd(target, this, this.getMaterial(), auxToCheck, this.getRealTemplateId());");
+                            qualitySortOkay[0] = true;
+                        }
                     }
-                }
-            });
+                });
+                if (!qualitySortOkay[0])
+                    logger.warning("Error enabling bulk-ql-sort in addBulkItemBytecode");
+            }
             if (options.isEnableRarityStorage()) {
                 String source = "toaddTo.setRarity(this.getRarity());";
                 addBulkItemCt.insertAt(3965, source);
-                successes[1] = 1;
             }
-
         }catch (NotFoundException | CannotCompileException e){
             logger.warning(e.getMessage());
         }
-        return successes;
     }
 
     /**
@@ -175,10 +164,8 @@ public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable,
      *          if (!this.isFish()) {...}
      *      line 3838: 657
      */
-    private int[] addBulkItemToCrateBytecode(){
+    private void addBulkItemToCrateBytecode(){
         ConfigureOptions options = ConfigureOptions.getInstance();
-        int[] successes = new int[2];
-        Arrays.fill(successes, 0);
         try {
             CtClass itemCt = HookManager.getInstance().getClassPool().get("com.wurmonline.server.items.Item");
             CtClass returnType = CtPrimitiveType.booleanType;
@@ -187,27 +174,30 @@ public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable,
                     HookManager.getInstance().getClassPool().get("com.wurmonline.server.items.Item")
             };
             CtMethod addBulkItemCt = itemCt.getMethod("AddBulkItemToCrate", Descriptor.ofMethod(returnType, paramTypes));
-            addBulkItemCt.instrument(new ExprEditor(){
-                @Override
-                public void edit(MethodCall methodCall) throws CannotCompileException {
-                    if (Objects.equals("getItemWithTemplateAndMaterial", methodCall.getMethodName())){
-                        logger.fine("replace on getItemWithTemplateAndMaterial inside Item.AddBulkItemToCrate() at line "
-                                + methodCall.getLineNumber());
-                        methodCall.replace("$_ = com.wurmonline.server.items.Item.getTargetToAdd(target, this, this.getMaterial(), auxToCheck, this.getRealTemplateId());");
-                        successes[0] = 1;
+            if (options.isEnableBulkQualitySorting()) {
+                final boolean[] qualitySortOkay = {false};
+                addBulkItemCt.instrument(new ExprEditor() {
+                    @Override
+                    public void edit(MethodCall methodCall) throws CannotCompileException {
+                        if (Objects.equals("getItemWithTemplateAndMaterial", methodCall.getMethodName())) {
+                            logger.fine("replace on getItemWithTemplateAndMaterial inside Item.AddBulkItemToCrate() at line "
+                                    + methodCall.getLineNumber());
+                            methodCall.replace("$_ = com.wurmonline.server.items.Item.getTargetToAdd(target, this, this.getMaterial(), auxToCheck, this.getRealTemplateId());");
+                            qualitySortOkay[0] = true;
+                        }
                     }
-                }
-            });
+                });
+                if (!qualitySortOkay[0])
+                    logger.warning("Error enabling bulk-ql-sort in addBulkItemBytecode");
+            }
             if (options.isEnableRarityStorage()){
                 String source = "toaddTo.setRarity(this.getRarity());";
                 addBulkItemCt.insertAt(3838, source);
-                successes[1] = 1;
             }
 
         }catch (NotFoundException | CannotCompileException e){
             logger.warning(e.getMessage());
         }
-        return successes;
     }
 
     /**
@@ -216,9 +206,7 @@ public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable,
      *      if (toInsert.isRepairable()) {...}
      * line 223: 777
      */
-    private int[] answerBytecode(){
-        int[] successes = new int[1];
-        Arrays.fill(successes, 0);
+    private void answerBytecode(){
         try{
             CtClass RemoveItemQuestionCt = HookManager.getInstance().getClassPool().get(
                     "com.wurmonline.server.questions.RemoveItemQuestion");
@@ -230,11 +218,9 @@ public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable,
 
             String source = "toInsert.setRarity(bulkitem.getRarity());";
             answerCt.insertAt(223, source);
-            successes[0] = 1;
         }catch (NotFoundException | CannotCompileException e){
             logger.warning(e.getMessage());
         }
-        return successes;
     }
 
     /**
@@ -243,10 +229,15 @@ public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable,
      *      the limiting logic statements. line 3402: 5419
      * 2) so rare items can go in bulk; logic, if (this.getRarity() > 0) {...} is always false. line 3345: 4988
      */
-    private int[] moveToItemBytecode(){
+    private void moveToItemBytecode(){
         ConfigureOptions options = ConfigureOptions.getInstance();
-        int[] successes = new int[3];
-        Arrays.fill(successes, 0);
+        Boolean[] successes;
+        if (!options.isEnablePreparedFoodStorage())
+            successes = new Boolean[]{true, true, false};
+        else if (!options.isEnableRarityStorage())
+            successes = new Boolean[]{false, false, true};
+        else
+            successes = new Boolean[]{false, false, false};
         try {
             CtClass ctClassItem = HookManager.getInstance().getClassPool().get("com.wurmonline.server.items.Item");
 
@@ -263,24 +254,25 @@ public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable,
                     if (Objects.equals("isDish", methodCall.getMethodName()) && options.isEnablePreparedFoodStorage()){
                         logger.fine("replace on isDish inside Item.moveToItem() at line " + methodCall.getLineNumber());
                         methodCall.replace("$_ = false;");
-                        successes[0] = 1;
+                        successes[0] = true;
                     } else if (Objects.equals("usesFoodState", methodCall.getMethodName()) && methodCall.getLineNumber() == 3402 &&
                             options.isEnablePreparedFoodStorage()){
                         logger.fine("replace on usesFoodState inside Item.moveToItem() at line " + methodCall.getLineNumber());
                         methodCall.replace("$_ = false;");
-                        successes[1] = 1;
+                        successes[1] = true;
                     } else if (Objects.equals("getRarity", methodCall.getMethodName()) && methodCall.getLineNumber() == 3345 &&
                             options.isEnableRarityStorage()){
                         logger.fine("replace on getRarity inside Item.moveToItem() at line " + methodCall.getLineNumber());
                         methodCall.replace("$_ = 0;");
-                        successes[2] = 1;
+                        successes[2] = true;
                     }
                 }
             });
         }catch (NotFoundException | CannotCompileException e){
             logger.warning(e.getMessage());
         }
-        return successes;
+        if (Arrays.stream(successes).anyMatch(aBoolean -> !aBoolean))
+            logger.warning(String.format("problem in moveToItemBytecode, %s", Arrays.toString(successes)));
     }
 
     /**
@@ -300,7 +292,7 @@ public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable,
      * @param depositRealTemplateId int primitive type
      * @return Item WU object  type
      */
-    @SuppressWarnings("unused")
+    @Deprecated
     public static Item getTargetToAdd1(Item bulkContainer, Item depositItem, int depositMaterial, byte depositAuxByte, int depositRealTemplateId){
         return Arrays.stream(bulkContainer.getItemsAsArray())
                 .filter(item -> item.getRealTemplateId() == depositItem.getTemplateId())
@@ -314,6 +306,7 @@ public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable,
                 .orElse(null);
     }
 
+    @Deprecated
     public static Item getTargetToAdd(Item bulkContainer, Item depositItem, int depositMaterial, byte depositAuxByte, int depositRealTemplateId){
         Item itemMatch = null;
         Item[] bulkItems = bulkContainer.getItemsAsArray();
@@ -328,10 +321,11 @@ public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable,
                 continue;
             if (bulkItems[i].getRarity() != depositItem.getRarity())
                 continue;
-            int intPartLower = (int) Math.floor((double)bulkItems[i].getQualityLevel() / ConfigureOptions.getInstance().getQualityRange());
-            boolean isLowerBoundGTEQ = depositItem.getQualityLevel() >= intPartLower * ConfigureOptions.getInstance().getQualityRange();
-            int intPartUpper = (int) Math.floor((double)bulkItems[i].getQualityLevel() / ConfigureOptions.getInstance().getQualityRange()) + 1;
-            boolean isUpperBoundLT = depositItem.getQualityLevel() < intPartUpper * ConfigureOptions.getInstance().getQualityRange();
+            int qualityRange = Math.max(100, bulkContainer.getData2() == -1 ? 100 : bulkContainer.getData2() == 0 ? 100 : bulkContainer.getData2());
+            int intPartLower = (int) Math.floor((double)bulkItems[i].getQualityLevel() / qualityRange);
+            boolean isLowerBoundGTEQ = depositItem.getQualityLevel() >= intPartLower * qualityRange;
+            int intPartUpper = (int) Math.floor((double)bulkItems[i].getQualityLevel() / qualityRange) + 1;
+            boolean isUpperBoundLT = depositItem.getQualityLevel() < intPartUpper * qualityRange;
             if (!isLowerBoundGTEQ || !isUpperBoundLT)
                 continue;
             itemMatch = bulkItems[i];
@@ -340,33 +334,27 @@ public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable,
         return itemMatch;
     }
 
+    @Deprecated
     private static boolean isLowerBoundGTEQ(double bulkItemQl, double depositItemQl){
-        ConfigureOptions options = ConfigureOptions.getInstance();
-        int intPart = (int) Math.floor(bulkItemQl / options.getQualityRange());
-        return depositItemQl >= intPart * options.getQualityRange();
+        int intPart = (int) Math.floor(bulkItemQl / 10);
+        return depositItemQl >= intPart * 10;
     }
 
+    @Deprecated
     private static boolean isUpperBoundLT(double bulkItemQl, double depositItemQl){
-        ConfigureOptions options = ConfigureOptions.getInstance();
-        int intPart = (int) Math.floor(bulkItemQl / options.getQualityRange()) + 1;
-        return depositItemQl < intPart * options.getQualityRange();
+        int intPart = (int) Math.floor(bulkItemQl / 10) + 1;
+        return depositItemQl < intPart * 10;
     }
 
-    static void makeItemsBulkReflection() {
-        ConfigureOptions options = ConfigureOptions.getInstance();
-        final int[] successCount = {0};
-        ArrayList<Integer> makeItemsBulk = options.getMakeTheseItemsBulk();
-        Arrays.stream(ItemTemplateFactory.getInstance().getTemplates())
-                .forEach(itemTemplate -> {
-                    if(makeItemsBulk.stream()
-                            .filter(value -> Objects.equals(value, itemTemplate.getTemplateId()))
-                            .count() > 0){
-                        if(setFieldBulk(itemTemplate))
-                            successCount[0]++;
-                    }
-                });
-        if (successCount[0] != makeItemsBulk.size())
-            logger.info("Make items bulk count specified, actual done: " + makeItemsBulk.size() + ", " + successCount[0]);
+    static private void makeItemsBulkReflection() {
+        ArrayList<Integer> makeItemsBulk = ConfigureOptions.getInstance().getMakeTheseItemsBulk();
+        boolean success = Arrays.stream(ItemTemplateFactory.getInstance().getTemplates())
+                .filter(itemTemplate -> makeItemsBulk.stream()
+                        .anyMatch(value -> Objects.equals(value, itemTemplate.getTemplateId())))
+                .map(BulkOptionsMod::setFieldBulk)
+                .anyMatch(aBoolean -> !aBoolean);
+        if (!success)
+            logger.info("Make items bulk FAIL");
         else
             logger.info("Make items bulk SUCCESS. TemplateId's " + makeItemsBulk.toString());
     }
@@ -382,14 +370,4 @@ public class BulkOptionsMod implements WurmServerMod, PreInitable, Configurable,
         return true;
     }
 
-    @SuppressWarnings("unused")
-    private static void evaluateChangesArray(int[] ints, String option) {
-        boolean changesSuccessful = Arrays.stream(ints).noneMatch(value -> value == 0);
-        if (changesSuccessful) {
-            logger.log(Level.INFO, option + " option changes SUCCESS");
-        } else {
-            logger.log(Level.INFO, option + " option changes FAILURE");
-            logger.log(Level.FINE, Arrays.toString(ints));
-        }
-    }
 }
