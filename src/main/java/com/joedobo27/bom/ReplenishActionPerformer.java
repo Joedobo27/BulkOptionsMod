@@ -1,11 +1,14 @@
 package com.joedobo27.bom;
 
 
+import com.wurmonline.server.Server;
 import com.wurmonline.server.behaviours.Action;
 import com.wurmonline.server.behaviours.ActionEntry;
+import com.wurmonline.server.behaviours.Actions;
 import com.wurmonline.server.creatures.Creature;
 import com.wurmonline.server.items.Item;
 import com.wurmonline.server.items.ItemList;
+import com.wurmonline.server.skills.Skill;
 import com.wurmonline.server.skills.SkillList;
 import org.gotti.wurmunlimited.modsupport.actions.ActionPerformer;
 import org.gotti.wurmunlimited.modsupport.actions.BehaviourProvider;
@@ -24,7 +27,7 @@ public class ReplenishActionPerformer implements ModAction, BehaviourProvider, A
     private final int actionId;
     private final ActionEntry actionEntry;
 
-    ReplenishActionPerformer(int actionId, ActionEntry actionEntry){
+    private ReplenishActionPerformer(int actionId, ActionEntry actionEntry){
         this.actionId = actionId;
         this.actionEntry = actionEntry;
     }
@@ -43,7 +46,7 @@ public class ReplenishActionPerformer implements ModAction, BehaviourProvider, A
         return (short)actionId;
     }
 
-    public ActionEntry getActionEntry() {
+    ActionEntry getActionEntry() {
         return actionEntry;
     }
 
@@ -60,33 +63,54 @@ public class ReplenishActionPerformer implements ModAction, BehaviourProvider, A
     public boolean action(Action action, Creature performer, Item active, Item target, short aActionId, float counter) {
         if (!ConfigureOptions.getInstance().isEnableReplenish())
             return propagate(action, SERVER_PROPAGATION, ACTION_PERFORMER_PROPAGATION);
-
-        ReplenishAction replenishAction = ReplenishAction.getReplenishAction(action);
-        if (replenishAction == null){
-            ConfigureOptions.ActionOptions options = ConfigureOptions.getInstance().getReplenishAction();
-            replenishAction = new ReplenishAction(action, performer, active, SkillList.GROUP_COOKING, options.getMinSkill(),
-                    options.getMaxSkill(), options.getLongestTime(), options.getShortestTime(), options.getMinimumStamina(),
-                    target);
+        if (target == null) {
+            performer.getCommunicator().sendNormalServerMessage("You need a target to make fresh.");
+            return propagate(action, FINISH_ACTION, NO_SERVER_PROPAGATION, NO_ACTION_PERFORMER_PROPAGATION);
+        }
+        boolean isHerbOrSpice = target.isHerb() || target.isSpice();
+        if (!isHerbOrSpice) {
+            performer.getCommunicator().sendNormalServerMessage("You can only refresh a herb or spice.");
+            return propagate(action, FINISH_ACTION, NO_SERVER_PROPAGATION, NO_ACTION_PERFORMER_PROPAGATION);
+        }
+        boolean isFresh = target.isFresh();
+        if (isFresh) {
+            performer.getCommunicator().sendNormalServerMessage(
+                    String.format("The %s is already fresh.", target.getName()));
+            return propagate(action, FINISH_ACTION, NO_SERVER_PROPAGATION, NO_ACTION_PERFORMER_PROPAGATION);
+        }
+        if (active == null){
+            performer.getCommunicator().sendNormalServerMessage(
+                    String.format("You need to use water to refresh up the %s.", target.getName()));
+            return propagate(action, FINISH_ACTION, NO_SERVER_PROPAGATION, NO_ACTION_PERFORMER_PROPAGATION);
+        }
+        boolean isWaterActive = active.getTemplateId() == ItemList.water;
+        if (!isWaterActive) {
+            performer.getCommunicator().sendNormalServerMessage(
+                    String.format("You need to water use to refresh the %s.", target.getName()));
+            return propagate(action, FINISH_ACTION, NO_SERVER_PROPAGATION, NO_ACTION_PERFORMER_PROPAGATION);
         }
 
-        if (replenishAction.hasAFailureCondition() && replenishAction.isActionStartTime(counter))
-            return propagate(action, FINISH_ACTION, NO_SERVER_PROPAGATION, NO_ACTION_PERFORMER_PROPAGATION);
-        if (replenishAction.isActionStartTime(counter)) {
-            replenishAction.doActionStartMessages();
-            replenishAction.setInitialTime(this.actionEntry);
-            performer.getStatus().modifyStamina(-1000.0f);
+        Skill cooking = performer.getSkills().getSkillOrLearn(SkillList.GROUP_COOKING);
+        int time;
+        if (counter == 1.0f) {
+            time = Actions.getStandardActionTime(performer, cooking, active, 0.0d);
+            action.setTimeLeft(time);
+            performer.getCommunicator().sendNormalServerMessage("You start to dredge.");
+            Server.getInstance().broadCastAction(performer.getName() + " starts to dredge.", performer, 5);
+            performer.sendActionControl(Actions.actionEntrys[362].getVerbString(), true, time);
+            performer.getStatus().modifyStamina(-3000.0f);
             return propagate(action, CONTINUE_ACTION, NO_SERVER_PROPAGATION, NO_ACTION_PERFORMER_PROPAGATION);
         }
 
-        if (!replenishAction.isActionTimedOut(action, counter)) {
+        time = action.getTimeLeft();
+        if (counter * 10.0f > time) {
             return propagate(action, CONTINUE_ACTION, NO_SERVER_PROPAGATION, NO_ACTION_PERFORMER_PROPAGATION);
         }
-        if(replenishAction.hasAFailureCondition())
-            return propagate(action, FINISH_ACTION, NO_SERVER_PROPAGATION, NO_ACTION_PERFORMER_PROPAGATION);
 
         target.setIsFresh(true);
         target.updateName();
-        replenishAction.doActionEndMessages();
+        performer.getCommunicator().sendNormalServerMessage("You dig a hole.");
+        Server.getInstance().broadCastAction(performer.getName() + " digs a hole.", performer, 5);
         return propagate(action, FINISH_ACTION, NO_SERVER_PROPAGATION, NO_ACTION_PERFORMER_PROPAGATION);
     }
 

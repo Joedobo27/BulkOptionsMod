@@ -7,7 +7,6 @@ version '1.0.3'
 sourceCompatibility = 1.8
 
 def WUServerPath = "C:\\Users\\Jason\\Documents\\WU\\WU-Server\\"
-def jdbCommonPath = "C:\\Users\\Jason\\IdeaProjects\\jdbCommon\\build\\libs\\"
 
 repositories {
     mavenCentral()
@@ -16,7 +15,6 @@ repositories {
 
 dependencies {
 
-    compile files("${jdbCommonPath}jdbCommon-1.0.jar")
     compileOnly files("${WUServerPath}common.jar")
     compileOnly files("${WUServerPath}server.jar")
     compileOnly files("${WUServerPath}modlauncher.jar")

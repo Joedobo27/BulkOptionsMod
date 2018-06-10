@@ -10,7 +10,6 @@ import org.gotti.wurmunlimited.modsupport.actions.ActionPerformer;
 import org.gotti.wurmunlimited.modsupport.actions.BehaviourProvider;
 import org.gotti.wurmunlimited.modsupport.actions.ModAction;
 import org.gotti.wurmunlimited.modsupport.actions.ModActions;
-import org.gotti.wurmunlimited.modsupport.questions.ModQuestion;
 import org.gotti.wurmunlimited.modsupport.questions.ModQuestions;
 
 import java.util.Collections;
@@ -58,10 +57,11 @@ public class ConfigureBinActionPerformer implements ModAction, BehaviourProvider
     @Override
     public boolean action(Action action, Creature performer, Item active, Item target, short aActionId, float counter) {
         if (active.getTemplateId() != ItemList.bodyHand || !target.isBulkContainer())
-            return propagate(action, SERVER_PROPAGATION, ACTION_PERFORMER_PROPAGATION);
+            return propagate(action);
         ConfigureBinQuestion configureBinQuestion = new ConfigureBinQuestion(target);
-        configureBinQuestion.sendQuestion(ModQuestions.createQuestion(performer, "Configure bulk",
-                    "Configure this how?", target.getWurmId(), configureBinQuestion));
+        Question question = ModQuestions.createQuestion(performer, "Configure bulk",
+                "Configure this how?", target.getWurmId(), configureBinQuestion);
+        configureBinQuestion.sendQuestion(question);
         return propagate(action, FINISH_ACTION);
     }
 
