@@ -18,11 +18,12 @@ dependencies {
     compileOnly files("${WUServerPath}common.jar")
     compileOnly files("${WUServerPath}server.jar")
     compileOnly files("${WUServerPath}modlauncher.jar")
+    compileOnly files("${WUServerPath}javassist.jar")
 
     // https://mvnrepository.com/artifact/junit/junit
     testCompile group: 'junit', name: 'junit', version: '4.12'
     // https://mvnrepository.com/artifact/org.javassist/javassist
-    compileOnly group: 'org.javassist', name: 'javassist', version: '3.20.0-GA'
+    //compileOnly group: 'org.javassist', name: 'javassist', version: '3.20.0-GA'
     // https://mvnrepository.com/artifact/com.intellij/annotations
     compile group: 'com.intellij', name: 'annotations', version: '12.0'
     // https://mvnrepository.com/artifact/org.glassfish/javax.json

@@ -27,7 +27,7 @@ public class ConfigureBinQuestion implements ModQuestion {
 
     @Override
     public void sendQuestion(Question question) {
-        int qualityDivision = this.bin.getData2() <= 0 ? 100 : this.bin.getData2();
+        int qualityDivision = this.bin.getData2() <= 0 ? 101 : this.bin.getData2();
         BmlNodeBuilder tableNode = table(2).withAttribute("rows", 1)
                 .withNode(label("Divide qualities into groups of x quality ranges."))
                 .withNode(input("qualityDivision").withAttribute("maxchars", 20)
